@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
+	"github.com/influxdata/telegraf/internal/limiter"
 	"github.com/influxdata/telegraf/plugins/common/kafka"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
@@ -38,6 +40,7 @@ type KafkaConsumer struct {
 	ConsumerGroup          string          `toml:"consumer_group"`
 	MaxMessageLen          int             `toml:"max_message_len"`
 	MaxUndeliveredMessages int             `toml:"max_undelivered_messages"`
+	RateLimit              int             `toml:"rate_limit"`
 	MaxProcessingTime      config.Duration `toml:"max_processing_time"`
 	Offset                 string          `toml:"offset"`
 	BalanceStrategy        string          `toml:"balance_strategy"`
@@ -98,6 +101,9 @@ func (k *KafkaConsumer) Init() error {
 
 	if k.MaxUndeliveredMessages == 0 {
 		k.MaxUndeliveredMessages = defaultMaxUndeliveredMessages
+	}
+	if k.RateLimit == 0 {
+		k.RateLimit = math.MaxInt
 	}
 	if time.Duration(k.MaxProcessingTime) == 0 {
 		k.MaxProcessingTime = defaultMaxProcessingTime
@@ -310,6 +316,7 @@ func (k *KafkaConsumer) Start(acc telegraf.Accumulator) error {
 		for ctx.Err() == nil {
 			handler := NewConsumerGroupHandler(acc, k.MaxUndeliveredMessages, k.parser, k.Log)
 			handler.MaxMessageLen = k.MaxMessageLen
+			handler.RateLimit = k.RateLimit
 			handler.TopicTag = k.TopicTag
 			// We need to copy allWantedTopics; the Consume() is
 			// long-running and we can easily deadlock if our
@@ -373,6 +380,7 @@ func NewConsumerGroupHandler(acc telegraf.Accumulator, maxUndelivered int, parse
 type ConsumerGroupHandler struct {
 	MaxMessageLen int
 	TopicTag      string
+	RateLimit     int
 
 	acc    telegraf.TrackingAccumulator
 	sem    semaphore
@@ -479,13 +487,14 @@ func (h *ConsumerGroupHandler) Handle(session sarama.ConsumerGroupSession, msg *
 // thread-safe.  Should run until the claim is closed.
 func (h *ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	ctx := session.Context()
-
+	lmtr := limiter.NewRateLimiter(h.RateLimit, time.Second)
+	defer lmtr.Stop()
 	for {
 		err := h.Reserve(ctx)
 		if err != nil {
 			return err
 		}
-
+		<-lmtr.C
 		select {
 		case <-ctx.Done():
 			return nil

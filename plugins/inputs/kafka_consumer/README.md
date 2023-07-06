@@ -160,6 +160,12 @@ to use them.
   ## setting it too low may never flush the broker's messages.
   # max_undelivered_messages = 1000
 
+  ## Rate Limit at partition level per sec (default 0/unlimited)
+  ## This value needs to be picked with awareness of the agent's
+  ## max_undelivered_messages value as well.
+  ##
+  # rate_limit = 1000
+
   ## Maximum amount of time the consumer should take to process messages. If
   ## the debug log prints messages from sarama about 'abandoning subscription
   ## to [topic] because consuming was taking too long', increase this value to

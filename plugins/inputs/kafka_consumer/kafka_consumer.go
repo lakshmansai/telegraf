@@ -312,11 +312,12 @@ func (k *KafkaConsumer) Start(acc telegraf.Accumulator) error {
 		}
 
 		k.startErrorAdder(acc)
-
+		rateLimiter := limiter.NewRateLimiter(k.RateLimit, time.Second)
+		defer rateLimiter.Stop()
 		for ctx.Err() == nil {
 			handler := NewConsumerGroupHandler(acc, k.MaxUndeliveredMessages, k.parser, k.Log)
 			handler.MaxMessageLen = k.MaxMessageLen
-			handler.RateLimit = k.RateLimit
+			handler.limiter = rateLimiter
 			handler.TopicTag = k.TopicTag
 			// We need to copy allWantedTopics; the Consume() is
 			// long-running and we can easily deadlock if our
@@ -380,13 +381,13 @@ func NewConsumerGroupHandler(acc telegraf.Accumulator, maxUndelivered int, parse
 type ConsumerGroupHandler struct {
 	MaxMessageLen int
 	TopicTag      string
-	RateLimit     int
 
-	acc    telegraf.TrackingAccumulator
-	sem    semaphore
-	parser telegraf.Parser
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	limiter *limiter.RateLimiter
+	acc     telegraf.TrackingAccumulator
+	sem     semaphore
+	parser  telegraf.Parser
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
 
 	mu          sync.Mutex
 	undelivered map[telegraf.TrackingID]Message
@@ -487,14 +488,12 @@ func (h *ConsumerGroupHandler) Handle(session sarama.ConsumerGroupSession, msg *
 // thread-safe.  Should run until the claim is closed.
 func (h *ConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	ctx := session.Context()
-	lmtr := limiter.NewRateLimiter(h.RateLimit, time.Second)
-	defer lmtr.Stop()
 	for {
 		err := h.Reserve(ctx)
 		if err != nil {
 			return err
 		}
-		<-lmtr.C
+		<-h.limiter.C
 		select {
 		case <-ctx.Done():
 			return nil

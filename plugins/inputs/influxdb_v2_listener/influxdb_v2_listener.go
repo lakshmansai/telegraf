@@ -246,7 +246,6 @@ func (h *InfluxDBV2Listener) handleWrite() http.HandlerFunc {
 
 		var readErr error
 		var bytes []byte
-		//body = http.MaxBytesReader(res, req.Body, 1000000) //p.MaxBodySize.Size)
 		bytes, readErr = io.ReadAll(body)
 		if readErr != nil {
 			h.Log.Debugf("Error parsing the request body: %v", readErr.Error())
@@ -271,7 +270,10 @@ func (h *InfluxDBV2Listener) handleWrite() http.HandlerFunc {
 
 			if precisionStr != "" {
 				precision := getPrecisionMultiplier(precisionStr)
-				parser.SetTimePrecision(precision)
+				if err = parser.SetTimePrecision(precision); err != nil {
+					h.Log.Debugf("Error setting precision of parser: %v", err)
+					return
+				}
 			}
 
 			metrics, err = parser.Parse(bytes)

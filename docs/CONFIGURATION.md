@@ -205,6 +205,17 @@ This example illustrates the use of secret-store(s) in plugins
   bucket = "replace_with_your_bucket_name"
 ```
 
+### Notes
+
+When using plugins supporting secrets, Telegraf locks the memory pages
+containing the secrets. Therefore, the locked memory limit has to be set to a
+suitable value. Telegraf will check the limit and the number of used secrets at
+startup and will warn if your limit is too low. In this case, please increase
+the limit via `ulimit -l`.
+
+If you are running Telegraf in an jail you might need to allow locked pages in
+that jail by setting `allow.mlock = 1;` in your config.
+
 ## Intervals
 
 Intervals are durations of time and can be specified for supporting settings by
@@ -325,6 +336,11 @@ The agent table configures Telegraf and the defaults used across all plugins.
   Ensure tags explicitly defined in a plugin will *always* pass tag-filtering
   via `taginclude` or `tagexclude`. This removes the need to specify local tags
   twice.
+
+- **always_include_global_tags**:
+  Ensure tags explicitly defined in the `global_tags` section will *always* pass
+  tag-filtering   via `taginclude` or `tagexclude`. This removes the need to
+  specify those tags twice.
 
 ## Plugins
 

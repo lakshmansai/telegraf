@@ -56,6 +56,14 @@ func TestEnvironmentSubstitution(t *testing.T) {
 			expected: "Env var VALUE is set, with VALUE syntax and default on this Substituted, no default on this VALUE2",
 		},
 		{
+			name: "empty but set",
+			setEnv: func(t *testing.T) {
+				t.Setenv("EMPTY", "")
+			},
+			contents: "Contains ${EMPTY} nothing",
+			expected: "Contains  nothing",
+		},
+		{
 			name:     "Default has special chars",
 			contents: `Not recommended but supported ${MY_VAR:-Default with special chars Supported#$\"}`,
 			expected: `Not recommended but supported Default with special chars Supported#$\"`, // values are escaped
@@ -181,12 +189,18 @@ func TestEnvironmentSubstitutionOldBehavior(t *testing.T) {
 			contents: `${1}`,
 			expected: `${1}`,
 		},
+		{
+			name:     "empty but set",
+			contents: "Contains ${EMPTY} nothing",
+			expected: "Contains  nothing",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("VAR", "foobar")
 			t.Setenv("FALLBACK", "default")
+			t.Setenv("EMPTY", "")
 			actual, err := substituteEnvironment([]byte(tt.contents), true)
 			require.NoError(t, err)
 			require.EqualValues(t, tt.expected, string(actual))
@@ -284,6 +298,55 @@ func TestEnvironmentSubstitutionNewBehavior(t *testing.T) {
 			actual, err := substituteEnvironment([]byte(tt.contents), false)
 			require.NoError(t, err)
 			require.EqualValues(t, tt.expected, string(actual))
+		})
+	}
+}
+
+func TestParseConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		setEnv   func(*testing.T)
+		contents string
+		expected string
+		errmsg   string
+	}{
+		{
+			name: "empty var name",
+			contents: `
+# Environment variables can be used anywhere in this config file, simply surround
+# them with ${}. For strings the variable must be within quotes (ie, "${STR_VAR}"),
+# for numbers and booleans they should be plain (ie, ${INT_VAR}, ${BOOL_VAR})Should output ${NOT_SET:-${FALLBACK}}
+`,
+			expected: "\n\n\n\n",
+		},
+		{
+			name: "comment in command (issue #13643)",
+			contents: `
+			[[inputs.exec]]
+			  commands = ["echo \"abc#def\""]
+			`,
+			expected: `
+			[[inputs.exec]]
+			  commands = ["echo \"abc#def\""]
+			`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setEnv != nil {
+				tt.setEnv(t)
+			}
+			tbl, err := parseConfig([]byte(tt.contents))
+			if tt.errmsg != "" {
+				require.ErrorContains(t, err, tt.errmsg)
+				return
+			}
+
+			require.NoError(t, err)
+			if len(tt.expected) > 0 {
+				require.EqualValues(t, tt.expected, string(tbl.Data))
+			}
 		})
 	}
 }

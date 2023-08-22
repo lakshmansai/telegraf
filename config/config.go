@@ -263,6 +263,10 @@ type AgentConfig struct {
 	// Flag to always keep tags explicitly defined in the plugin itself and
 	// ensure those tags always pass filtering.
 	AlwaysIncludeLocalTags bool `toml:"always_include_local_tags"`
+
+	// Flag to always keep tags explicitly defined in the global tags section
+	// and ensure those tags always pass filtering.
+	AlwaysIncludeGlobalTags bool `toml:"always_include_global_tags"`
 }
 
 // InputNames returns a list of strings of the configured inputs.
@@ -803,8 +807,8 @@ func removeComments(contents []byte) ([]byte, error) {
 	tomlReader := bytes.NewReader(contents)
 
 	// Initialize variables for tracking state
-	var inQuote, inComment bool
-	var quoteChar, prevChar byte
+	var inQuote, inComment, escaped bool
+	var quoteChar byte
 
 	// Initialize buffer for modified TOML data
 	var output bytes.Buffer
@@ -821,6 +825,11 @@ func removeComments(contents []byte) ([]byte, error) {
 		}
 		char := buf[0]
 
+		// Toggle the escaped state at backslash to we have true every odd occurrence.
+		if char == '\\' {
+			escaped = !escaped
+		}
+
 		if inComment {
 			// If we're currently in a comment, check if this character ends the comment
 			if char == '\n' {
@@ -830,26 +839,30 @@ func removeComments(contents []byte) ([]byte, error) {
 			}
 		} else if inQuote {
 			// If we're currently in a quote, check if this character ends the quote
-			if char == quoteChar && prevChar != '\\' {
+			if char == quoteChar && !escaped {
 				// End of quote, we're no longer in a quote
 				inQuote = false
 			}
 			output.WriteByte(char)
 		} else {
 			// Not in a comment or a quote
-			if char == '"' || char == '\'' {
+			if (char == '"' || char == '\'') && !escaped {
 				// Start of quote
 				inQuote = true
 				quoteChar = char
 				output.WriteByte(char)
-			} else if char == '#' {
+			} else if char == '#' && !escaped {
 				// Start of comment
 				inComment = true
 			} else {
 				// Not a comment or a quote, just output the character
 				output.WriteByte(char)
 			}
-			prevChar = char
+		}
+
+		// Reset escaping if any other character occurred
+		if char != '\\' {
+			escaped = false
 		}
 	}
 	return output.Bytes(), nil
@@ -858,8 +871,8 @@ func removeComments(contents []byte) ([]byte, error) {
 func substituteEnvironment(contents []byte, oldReplacementBehavior bool) ([]byte, error) {
 	options := []template.Option{
 		template.WithReplacementFunction(func(s string, m template.Mapping, cfg *template.Config) (string, error) {
-			result, err := template.DefaultReplacementFunc(s, m, cfg)
-			if err == nil && result == "" {
+			result, applied, err := template.DefaultReplacementAppliedFunc(s, m, cfg)
+			if err == nil && !applied {
 				// Keep undeclared environment-variable patterns to reproduce
 				// pre-v1.27 behavior
 				return s, nil
@@ -948,6 +961,9 @@ func (c *Config) addSecretStore(name string, table *ast.Table) error {
 	if err := c.printUserDeprecation("secretstores", name, store); err != nil {
 		return err
 	}
+
+	logger := models.NewLogger("secretstores", name, "")
+	models.SetLoggerOnPlugin(store, logger)
 
 	if err := store.Init(); err != nil {
 		return fmt.Errorf("error initializing secret-store %q: %w", storeid, err)
@@ -1459,8 +1475,9 @@ func (c *Config) buildFilter(tbl *ast.Table) (models.Filter, error) {
 // models.InputConfig to be inserted into models.RunningInput
 func (c *Config) buildInput(name string, tbl *ast.Table) (*models.InputConfig, error) {
 	cp := &models.InputConfig{
-		Name:                   name,
-		AlwaysIncludeLocalTags: c.Agent.AlwaysIncludeLocalTags,
+		Name:                    name,
+		AlwaysIncludeLocalTags:  c.Agent.AlwaysIncludeLocalTags,
+		AlwaysIncludeGlobalTags: c.Agent.AlwaysIncludeGlobalTags,
 	}
 	c.getFieldDuration(tbl, "interval", &cp.Interval)
 	c.getFieldDuration(tbl, "precision", &cp.Precision)
